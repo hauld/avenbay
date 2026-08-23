@@ -4,6 +4,10 @@ This public repository distributes signed-version release artifacts for the
 Avenbay Fleet worker. Product source code is maintained in a private repository;
 this repository intentionally contains no application source.
 
+The auditable installer served by Cloudflare Pages lives in `public/`. The
+private release workflow synchronizes only `public/install.sh` and
+`public/_headers`; it never publishes Fleet application source.
+
 ## Install
 
 On a supported Linux systemd host:
@@ -21,6 +25,15 @@ curl -fsSL https://get.avenbay.com/install.sh
 The installer supports Linux AMD64 and ARM64. It downloads the latest release,
 verifies its SHA-256 checksum, creates an unprivileged `fleet` service account,
 and installs the worker and its systemd unit.
+
+## Cloudflare Pages
+
+`get.avenbay.com` deploys this repository with:
+
+- Production branch: `main`
+- Framework preset: None
+- Build command: `exit 0`
+- Build output directory: `public`
 
 ## Release assets
 
