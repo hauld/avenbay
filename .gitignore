@@ -1,0 +1,4 @@
+# Release binaries belong in GitHub Releases, not repository history.
+*.tar.gz
+checksums.txt
+fleet-worker
