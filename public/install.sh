@@ -95,14 +95,12 @@ fi
 systemctl daemon-reload
 "${install_dir}/avenbay" doctor
 
-say "fleet-worker installed successfully"
+say "Avenbay worker installed successfully"
 printf '%s\n' \
   "" \
   "Next:" \
   "  1. In Avenbay, open Hosts -> Add host." \
-  "  2. Run the single-use enrollment command." \
-  "  3. Save its values in ${config_dir}/worker.env." \
-  "  4. Set FLEET_ALLOWED_ROOTS and FLEET_ALLOWED_EXECUTABLES." \
-  "  5. Start the worker:" \
+  "  2. Run the generated sudo avenbay enroll command." \
+  "  3. The command securely configures and starts the worker." \
   "" \
-  "     sudo systemctl enable --now fleet-worker"
+  "Default project root: /home/fleet/projects"
