@@ -47,7 +47,7 @@ if ! command -v tmux >/dev/null 2>&1; then
   fi
 fi
 
-asset="fleet-worker_linux_${architecture}.tar.gz"
+asset="avenbay_linux_${architecture}.tar.gz"
 if [ "$release" = latest ]; then
   download_base="https://github.com/${repository}/releases/latest/download"
 else
@@ -69,7 +69,7 @@ actual_checksum=$(sha256sum "${temporary_dir}/${asset}" | awk '{ print $1 }')
 [ "$actual_checksum" = "$expected_checksum" ] || fail "worker archive checksum mismatch"
 
 tar -xzf "${temporary_dir}/${asset}" -C "$temporary_dir"
-[ -f "${temporary_dir}/fleet-worker" ] || fail "worker archive is invalid"
+[ -f "${temporary_dir}/avenbay" ] || fail "worker archive is invalid"
 [ -f "${temporary_dir}/fleet-worker.service" ] || fail "worker service is missing"
 
 if ! id "$worker_user" >/dev/null 2>&1; then
@@ -82,15 +82,18 @@ install -d -o root -g root -m 0755 "$install_dir"
 install -d -o root -g "$worker_group" -m 0750 "$config_dir"
 install -d -o "$worker_user" -g "$worker_group" -m 0700 "$state_dir"
 install -d -o "$worker_user" -g "$worker_group" -m 0750 "/home/${worker_user}/projects"
-install -o root -g root -m 0755 "${temporary_dir}/fleet-worker" "${install_dir}/fleet-worker"
+install -o root -g root -m 0755 "${temporary_dir}/avenbay" "${install_dir}/avenbay"
 install -o root -g root -m 0644 "${temporary_dir}/fleet-worker.service" "$service_path"
+if [ ! -e "${install_dir}/fleet-worker" ]; then
+  ln -s avenbay "${install_dir}/fleet-worker"
+fi
 
 if [ ! -e "${config_dir}/worker.env" ]; then
   install -o root -g "$worker_group" -m 0640 /dev/null "${config_dir}/worker.env"
 fi
 
 systemctl daemon-reload
-"${install_dir}/fleet-worker" doctor
+"${install_dir}/avenbay" doctor
 
 say "fleet-worker installed successfully"
 printf '%s\n' \
