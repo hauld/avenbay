@@ -16,6 +16,56 @@ fail() {
   exit 1
 }
 
+launchd_label=system/com.avenbay.worker
+
+launchd_worker_loaded() {
+  launchctl print "$launchd_label" >/dev/null 2>&1
+}
+
+stop_launchd_worker() {
+  launchd_worker_loaded || return 0
+
+  say "stopping the existing macOS worker"
+  launchctl bootout "$launchd_label" >/dev/null 2>&1 || true
+
+  attempt=0
+  while launchd_worker_loaded; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 10 ]; then
+      fail "launchd did not release the existing worker within 10 seconds; retry the installer"
+    fi
+    sleep 1
+  done
+  say "launchd released the previous worker"
+}
+
+start_launchd_worker() {
+  bootstrap_error=${temporary_dir}/launchctl-bootstrap.error
+  attempt=1
+  while [ "$attempt" -le 5 ]; do
+    : >"$bootstrap_error"
+    if launchctl bootstrap system "$service_path" 2>"$bootstrap_error" || launchd_worker_loaded; then
+      launchctl enable "$launchd_label"
+      launchctl kickstart -k "$launchd_label"
+      launchd_worker_loaded || fail "launchd did not retain the worker service after startup"
+      say "macOS worker service started"
+      return 0
+    fi
+
+    if [ "$attempt" -lt 5 ]; then
+      say "launchd is still releasing the previous worker; retrying startup (${attempt}/5)"
+      sleep 1
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  bootstrap_detail=$(tr '\n' ' ' <"$bootstrap_error" | sed 's/[[:space:]]*$//')
+  say "worker files were installed successfully, but the macOS service is not running" >&2
+  say "configuration and project data were not removed" >&2
+  [ -n "$bootstrap_detail" ] && say "launchd reported: ${bootstrap_detail}" >&2
+  fail "retry with: sudo launchctl bootstrap system ${service_path}"
+}
+
 [ "$(id -u)" -eq 0 ] || fail "run this installer as root (curl ... | sudo sh)"
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
@@ -149,11 +199,6 @@ EOF
   printf '%s\n' "$worker_group" > "${temporary_dir}/service-group"
 fi
 
-if [ "$platform" = Darwin ] && [ -d /Users/Shared/Avenbay ] && [ ! -e "$state_dir" ]; then
-  say "migrating /Users/Shared/Avenbay to ${state_dir}"
-  mv /Users/Shared/Avenbay "$state_dir"
-fi
-
 install -d -o root -g "$root_group" -m 0755 "$install_dir"
 install -d -o root -g "$worker_group" -m 0750 "$config_dir"
 install -d -o "$worker_user" -g "$worker_group" -m 0700 "$state_dir"
@@ -163,6 +208,7 @@ install -o root -g "$root_group" -m 0755 "${temporary_dir}/fleet-session" "${ins
 if [ "$platform" = Linux ]; then
   install -o root -g "$root_group" -m 0644 "${temporary_dir}/fleet-worker.service" "$service_path"
 else
+  stop_launchd_worker
   install -o root -g wheel -m 0644 "${temporary_dir}/com.avenbay.worker.plist" "$service_path"
   install -o root -g wheel -m 0644 "${temporary_dir}/service-group" "${config_dir}/service-group"
 fi
@@ -174,28 +220,33 @@ if [ ! -e "${config_dir}/worker.env" ]; then
   install -o root -g "$worker_group" -m 0640 /dev/null "${config_dir}/worker.env"
 fi
 
-if [ "$platform" = Darwin ] && grep -q '/Users/Shared/Avenbay' "${config_dir}/worker.env"; then
-  sed -i '' 's#/Users/Shared/Avenbay#/Users/Shared/fleet#g' "${config_dir}/worker.env"
-fi
-
 if [ "$platform" = Linux ]; then
   systemctl daemon-reload
 elif grep -q '^FLEET_WORKER_TOKEN=.' "${config_dir}/worker.env"; then
-  launchctl bootout system/com.avenbay.worker >/dev/null 2>&1 || true
-  launchctl bootstrap system "$service_path"
-  launchctl enable system/com.avenbay.worker
-  launchctl kickstart -k system/com.avenbay.worker
+  say "existing enrollment configuration found"
+  start_launchd_worker
 fi
 PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" "${install_dir}/avenbay" doctor
 
 say "Avenbay worker installed successfully"
-printf '%s\n' \
-  "" \
-  "Next:" \
-  "  1. In Avenbay, open Hosts -> Add host." \
-  "  2. Change to the directory containing your projects." \
-  "  3. Run the generated sudo avenbay enroll command." \
-  "  4. The command uses that directory as its project root and starts the worker." \
-  "" \
-  "Worker account: ${worker_user}" \
-  "Prepared project directory: ${project_root}"
+if grep -q '^FLEET_WORKER_TOKEN=.' "${config_dir}/worker.env"; then
+  printf '%s\n' \
+    "" \
+    "Existing enrollment configuration was preserved." \
+    "Confirm this host is online in Avenbay. If it was removed or revoked," \
+    "open Hosts -> Add host and run the new enrollment command." \
+    "" \
+    "Worker account: ${worker_user}" \
+    "Project root: ${project_root}"
+else
+  printf '%s\n' \
+    "" \
+    "Next:" \
+    "  1. In Avenbay, open Hosts -> Add host." \
+    "  2. Change to the directory containing your projects." \
+    "  3. Run the generated sudo avenbay enroll command." \
+    "  4. The command uses that directory as its project root and starts the worker." \
+    "" \
+    "Worker account: ${worker_user}" \
+    "Prepared project directory: ${project_root}"
+fi
