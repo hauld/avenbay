@@ -23,6 +23,7 @@ command -v tar >/dev/null 2>&1 || fail "tar is required"
 case "$platform" in
   Linux)
     release_os=linux
+    root_group=root
     worker_user=fleet
     state_dir=/var/lib/fleet
     project_root=/home/fleet/projects
@@ -32,6 +33,7 @@ case "$platform" in
     ;;
   Darwin)
     release_os=darwin
+    root_group=wheel
     PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
     export PATH
     worker_user=${AVENBAY_RUN_USER:-${SUDO_USER:-}}
@@ -43,7 +45,7 @@ case "$platform" in
     worker_home=$(dscl . -read "/Users/${worker_user}" NFSHomeDirectory | sed 's/^[^:]*: //')
     [ -n "$worker_home" ] || fail "cannot determine the home directory for ${worker_user}"
     worker_group=$(id -gn "$worker_user")
-    state_dir=/Users/Shared/Avenbay
+    state_dir=/Users/Shared/fleet
     project_root=${state_dir}/projects
     service_path=/Library/LaunchDaemons/com.avenbay.worker.plist
     command -v launchctl >/dev/null 2>&1 || fail "launchd is required"
@@ -107,6 +109,7 @@ fi
 
 tar -xzf "${temporary_dir}/${asset}" -C "$temporary_dir"
 [ -f "${temporary_dir}/avenbay" ] || fail "worker archive is invalid"
+[ -f "${temporary_dir}/fleet-session" ] || fail "session CLI is missing from worker archive"
 
 if [ "$platform" = Linux ]; then
   [ -f "${temporary_dir}/fleet-worker.service" ] || fail "worker service is missing"
@@ -138,21 +141,27 @@ else
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
   <key>ThrottleInterval</key><integer>5</integer>
-  <key>StandardOutPath</key><string>/Users/Shared/Avenbay/worker.log</string>
-  <key>StandardErrorPath</key><string>/Users/Shared/Avenbay/worker-error.log</string>
+  <key>StandardOutPath</key><string>/Users/Shared/fleet/worker.log</string>
+  <key>StandardErrorPath</key><string>/Users/Shared/fleet/worker-error.log</string>
 </dict>
 </plist>
 EOF
   printf '%s\n' "$worker_group" > "${temporary_dir}/service-group"
 fi
 
-install -d -o root -g root -m 0755 "$install_dir"
+if [ "$platform" = Darwin ] && [ -d /Users/Shared/Avenbay ] && [ ! -e "$state_dir" ]; then
+  say "migrating /Users/Shared/Avenbay to ${state_dir}"
+  mv /Users/Shared/Avenbay "$state_dir"
+fi
+
+install -d -o root -g "$root_group" -m 0755 "$install_dir"
 install -d -o root -g "$worker_group" -m 0750 "$config_dir"
 install -d -o "$worker_user" -g "$worker_group" -m 0700 "$state_dir"
 install -d -o "$worker_user" -g "$worker_group" -m 0750 "$project_root"
-install -o root -g root -m 0755 "${temporary_dir}/avenbay" "${install_dir}/avenbay"
+install -o root -g "$root_group" -m 0755 "${temporary_dir}/avenbay" "${install_dir}/avenbay"
+install -o root -g "$root_group" -m 0755 "${temporary_dir}/fleet-session" "${install_dir}/fleet-session"
 if [ "$platform" = Linux ]; then
-  install -o root -g root -m 0644 "${temporary_dir}/fleet-worker.service" "$service_path"
+  install -o root -g "$root_group" -m 0644 "${temporary_dir}/fleet-worker.service" "$service_path"
 else
   install -o root -g wheel -m 0644 "${temporary_dir}/com.avenbay.worker.plist" "$service_path"
   install -o root -g wheel -m 0644 "${temporary_dir}/service-group" "${config_dir}/service-group"
@@ -165,8 +174,17 @@ if [ ! -e "${config_dir}/worker.env" ]; then
   install -o root -g "$worker_group" -m 0640 /dev/null "${config_dir}/worker.env"
 fi
 
+if [ "$platform" = Darwin ] && grep -q '/Users/Shared/Avenbay' "${config_dir}/worker.env"; then
+  sed -i '' 's#/Users/Shared/Avenbay#/Users/Shared/fleet#g' "${config_dir}/worker.env"
+fi
+
 if [ "$platform" = Linux ]; then
   systemctl daemon-reload
+elif grep -q '^FLEET_WORKER_TOKEN=.' "${config_dir}/worker.env"; then
+  launchctl bootout system/com.avenbay.worker >/dev/null 2>&1 || true
+  launchctl bootstrap system "$service_path"
+  launchctl enable system/com.avenbay.worker
+  launchctl kickstart -k system/com.avenbay.worker
 fi
 PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" "${install_dir}/avenbay" doctor
 
@@ -175,8 +193,9 @@ printf '%s\n' \
   "" \
   "Next:" \
   "  1. In Avenbay, open Hosts -> Add host." \
-  "  2. Run the generated sudo avenbay enroll command." \
-  "  3. The command securely configures and starts the worker." \
+  "  2. Change to the directory containing your projects." \
+  "  3. Run the generated sudo avenbay enroll command." \
+  "  4. The command uses that directory as its project root and starts the worker." \
   "" \
   "Worker account: ${worker_user}" \
-  "Default project root: ${project_root}"
+  "Prepared project directory: ${project_root}"
