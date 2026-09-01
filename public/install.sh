@@ -159,7 +159,7 @@ fi
 
 tar -xzf "${temporary_dir}/${asset}" -C "$temporary_dir"
 [ -f "${temporary_dir}/avenbay" ] || fail "worker archive is invalid"
-[ -f "${temporary_dir}/fleet-session" ] || fail "session CLI is missing from worker archive"
+[ -f "${temporary_dir}/aven" ] || fail "short CLI alias is missing from worker archive"
 
 if [ "$platform" = Linux ]; then
   [ -f "${temporary_dir}/fleet-worker.service" ] || fail "worker service is missing"
@@ -179,7 +179,7 @@ else
 <dict>
   <key>Label</key><string>com.avenbay.worker</string>
   <key>ProgramArguments</key>
-  <array><string>${install_dir}/avenbay</string><string>serve</string></array>
+  <array><string>${install_dir}/avenbay</string><string>worker</string><string>run</string></array>
   <key>UserName</key><string>${worker_user}</string>
   <key>GroupName</key><string>${worker_group}</string>
   <key>WorkingDirectory</key><string>${project_root}</string>
@@ -203,8 +203,22 @@ install -d -o root -g "$root_group" -m 0755 "$install_dir"
 install -d -o root -g "$worker_group" -m 0750 "$config_dir"
 install -d -o "$worker_user" -g "$worker_group" -m 0700 "$state_dir"
 install -d -o "$worker_user" -g "$worker_group" -m 0750 "$project_root"
+
+backup_previous_file() {
+  previous_path=${1}.previous
+  if { [ -e "$1" ] || [ -L "$1" ]; } && ! { [ -e "$previous_path" ] || [ -L "$previous_path" ]; }; then
+    cp -p "$1" "$previous_path"
+    say "preserved previous $(basename "$1") as ${previous_path}"
+  fi
+}
+
+backup_previous_file "${install_dir}/avenbay"
+backup_previous_file "${install_dir}/fleet-worker"
+backup_previous_file "${install_dir}/fleet-session"
+backup_previous_file "$service_path"
+
 install -o root -g "$root_group" -m 0755 "${temporary_dir}/avenbay" "${install_dir}/avenbay"
-install -o root -g "$root_group" -m 0755 "${temporary_dir}/fleet-session" "${install_dir}/fleet-session"
+ln -sf avenbay "${install_dir}/aven"
 if [ "$platform" = Linux ]; then
   install -o root -g "$root_group" -m 0644 "${temporary_dir}/fleet-worker.service" "$service_path"
 else
@@ -212,9 +226,12 @@ else
   install -o root -g wheel -m 0644 "${temporary_dir}/com.avenbay.worker.plist" "$service_path"
   install -o root -g wheel -m 0644 "${temporary_dir}/service-group" "${config_dir}/service-group"
 fi
-if [ ! -e "${install_dir}/fleet-worker" ]; then
-  ln -s avenbay "${install_dir}/fleet-worker"
-fi
+for legacy_command in fleet-worker fleet-session; do
+  if [ -e "${install_dir}/${legacy_command}" ] || [ -L "${install_dir}/${legacy_command}" ]; then
+    say "removing obsolete ${legacy_command} command"
+    rm -f "${install_dir}/${legacy_command}"
+  fi
+done
 
 if [ ! -e "${config_dir}/worker.env" ]; then
   install -o root -g "$worker_group" -m 0640 /dev/null "${config_dir}/worker.env"
@@ -222,6 +239,11 @@ fi
 
 if [ "$platform" = Linux ]; then
   systemctl daemon-reload
+  if grep -q '^FLEET_WORKER_TOKEN=.' "${config_dir}/worker.env"; then
+    say "existing enrollment configuration found; restarting the Linux worker"
+    systemctl enable fleet-worker.service
+    systemctl restart fleet-worker.service
+  fi
 elif grep -q '^FLEET_WORKER_TOKEN=.' "${config_dir}/worker.env"; then
   say "existing enrollment configuration found"
   start_launchd_worker
@@ -244,7 +266,7 @@ else
     "Next:" \
     "  1. In Avenbay, open Hosts -> Add host." \
     "  2. Change to the directory containing your projects." \
-    "  3. Run the generated sudo avenbay enroll command." \
+    "  3. Run the generated sudo avenbay host enroll command." \
     "  4. The command uses that directory as its project root and starts the worker." \
     "" \
     "Worker account: ${worker_user}" \
